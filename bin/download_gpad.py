@@ -36,13 +36,13 @@ def main(month: str, zip_file: str = None):
         download_gpad_zip_file(month, zip_file)
     except Exception as e:
         logger.error(f"Error downloading zip file: {e}")
-        return
+        raise e
 
     try:
         unzip_gpad_zip_file(month)
     except Exception as e:
         logger.error(f"Error unzipping zip file: {e}")
-        return
+        raise e
 
     input = get_data_file_path(month)
 
@@ -50,19 +50,19 @@ def main(month: str, zip_file: str = None):
         data, gp_code_to_name = process_data_file(input)
     except Exception as e:
         logger.error(f"Error processing data file: {e}")
-        return
+        raise e
 
     try:
         write_output_file(data, gp_code_to_name)
     except Exception as e:
         logger.error(f"Error writing output file: {e}")
-        return
+        raise e
 
     try:
         remove_tmp_files(month)
     except Exception as e:
         logger.error(f"Error removing temporary files: {e}")
-        return
+        raise e
 
     logger.info(f"Completed processing data for {month}")
 
