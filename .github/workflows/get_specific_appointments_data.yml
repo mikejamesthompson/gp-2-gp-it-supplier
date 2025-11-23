@@ -1,0 +1,42 @@
+name: Update to specific month's Appointments in General Practice data
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: The month to download the data for (e.g. 2025-01)
+        required: true
+      zip_file:
+        description: The URL of the zip file to download
+        required: true
+
+jobs:
+  scheduled:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v3
+
+      - name: Install Mise
+        uses: jdx/mise-action@v3
+        with:
+          cache: true
+
+      - name: Install dependencies
+        run: mise install
+
+      - name: Download Appointments in General Practice data
+        run: uv run bin/download_gpad.py --month ${{ github.event.inputs.month }} --zip-file ${{ github.event.inputs.zip_file }}
+
+      - name: Commit and push if it changed
+        run: |-
+          git config user.name "Automated update"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          timestamp=$(date -u + "%Y-%m")
+          git commit -m "Appointments in General Practice update: ${timestamp}" || exit 0
+          git push
