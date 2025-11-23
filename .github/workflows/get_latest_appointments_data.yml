@@ -23,7 +23,7 @@ jobs:
         run: mise install
 
       - name: Download Appointments in General Practice data
-        run: uv run bin/download_gpad.py --month $(date -u +"%Y-%m")
+        run: uv run bin/download_gpad.py
 
       - name: Commit and push if it changed
         run: |-
@@ -34,6 +34,6 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          timestamp=$(date -u + "%Y-%m")
+          timestamp=$(date -u)
           git commit -m "Appointments in General Practice update: ${timestamp}" || exit 0
           git push

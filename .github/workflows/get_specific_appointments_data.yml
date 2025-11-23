@@ -37,6 +37,5 @@ jobs:
             echo "No changes to commit"
             exit 0
           fi
-          timestamp=$(date -u + "%Y-%m")
-          git commit -m "Appointments in General Practice update: ${timestamp}" || exit 0
+          git commit -m "Appointments in General Practice update: ${{ github.event.inputs.month }}" || exit 0
           git push
