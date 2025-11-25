@@ -1,9 +1,6 @@
 name: Update to latest Appointments in General Practice data
 
 on:
-  push:
-    branches:
-      - main
   schedule:
     - cron:  '0 3 * * 0'
 
