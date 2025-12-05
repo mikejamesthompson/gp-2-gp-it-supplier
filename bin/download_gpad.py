@@ -16,7 +16,7 @@ from dateutil.relativedelta import relativedelta
 import requests
 
 from helpers import (
-    get_data_file_path,
+    get_data_file_paths,
     get_main_system_from_value,
     get_month_and_year_from_iso_month,
 )
@@ -39,15 +39,16 @@ def main(month: str, zip_file: str = None):
         raise e
 
     try:
-        unzip_gpad_zip_file(month)
+        unzip_dir = unzip_gpad_zip_file(month)
     except Exception as e:
         logger.error(f"Error unzipping zip file: {e}")
         raise e
 
-    input = get_data_file_path(month)
+    input_file_paths = get_data_file_paths(unzip_dir, month)
+    logger.info(f"Found {len(input_file_paths)} data files")
 
     try:
-        data, gp_code_to_name = process_data_file(input)
+        data, gp_code_to_name = process_data_files(input_file_paths)
     except Exception as e:
         logger.error(f"Error processing data file: {e}")
         raise e
@@ -128,30 +129,32 @@ def unzip_gpad_zip_file(month: str):
 
     logger.info(f"Unzipped zip file to {unzip_dir}")
 
+    return unzip_dir
 
-def process_data_file(input_file_path: str):
+
+def process_data_files(input_file_paths: list[str]):
     data = {}
     gp_code_to_name = {}
 
-    logger.info(f"Processing data file: {input_file_path}")
+    for input_file_path in input_file_paths:
+        logger.info(f"Processing data file: {input_file_path}")
+        with open(input_file_path, "r") as file:
+            reader = csv.reader(file)
+            for index, row in enumerate(reader):
+                if index == 0:
+                    continue
 
-    with open(input_file_path, "r") as file:
-        reader = csv.reader(file)
-        for index, row in enumerate(reader):
-            if index == 0:
-                continue
+                gp_code = row[1]
+                gp_name = row[2]
 
-            gp_code = row[1]
-            gp_name = row[2]
+                appointments_systems = row[3]
+                main_system = get_main_system_from_value(appointments_systems)
 
-            appointments_systems = row[3]
-            main_system = get_main_system_from_value(appointments_systems)
+                if gp_code not in data:
+                    data[gp_code] = (appointments_systems, main_system)
 
-            if gp_code not in data:
-                data[gp_code] = (appointments_systems, main_system)
-
-            if gp_code not in gp_code_to_name:
-                gp_code_to_name[gp_code] = gp_name
+                if gp_code not in gp_code_to_name:
+                    gp_code_to_name[gp_code] = gp_name
 
     return data, gp_code_to_name
 

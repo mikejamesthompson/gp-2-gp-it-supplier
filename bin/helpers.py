@@ -1,3 +1,6 @@
+import os
+
+
 def month_to_name(month: str):
     """
     Translate a zero-padded month string to a name
@@ -35,21 +38,28 @@ def get_month_and_year_from_iso_month(iso_month: str):
     return month, year
 
 
-def get_data_file_path(iso_month: str):
+def get_data_file_paths(unzip_dir: str, iso_month: str):
     """
-    Get the path to the Practice Level Crosstab file in an extracted zip file for an ISO month
+    Get the paths to the Practice Level Crosstab files in an extracted zip file for an ISO month
 
     Args:
+        unzip_dir: The directory to search for the files in (e.g. "tmp/2025-01")
         iso_month: The ISO month string (e.g. "2025-01")
 
     Returns:
-        The path to the Practice Level Crosstab file in an extracted zip file
-        (e.g. "tmp/2025-01/Practice_Level_Crosstab_Jan_25.csv")
+        The paths to the Practice Level Crosstab files in an extracted zip file
+        (e.g. ["tmp/2025-01/Practice_Level_Crosstab_Midlands_Feb_25.csv", "tmp/2025-01/Practice_Level_Crosstab_North_East_Feb_25.csv"])
     """
     month, year = get_month_and_year_from_iso_month(iso_month)
-    abbreviated_month = month[:3].capitalize()
-    abbreviated_year = year[2:4]
-    return f"tmp/{iso_month}/Practice_Level_Crosstab_{abbreviated_month}_{abbreviated_year}.csv"
+    abbreviated_month = month[:3].capitalize()  # e.g. 10 becomes Oct
+    abbreviated_year = year[2:4]  # e.g. 2025 becomes 25
+    search_string = f"{abbreviated_month}_{abbreviated_year}.csv"
+
+    return [
+        os.path.join(unzip_dir, f)
+        for f in os.listdir(unzip_dir)
+        if f.endswith(search_string)
+    ]
 
 
 def get_main_system_from_value(value):
