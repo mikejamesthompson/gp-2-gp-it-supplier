@@ -22,7 +22,9 @@ from gpad_helpers import (
 )
 
 BASE_GPAD_URL = "https://digital.nhs.uk/data-and-information/publications/statistical/appointments-in-general-practice"
+EPRACCUR_URL = "https://www.odsdatasearchandexport.nhs.uk/api/getReport?report=epraccur"
 OUTPUT_FILE = "data/gp_suppliers.csv"
+EPRACCUR_TMP_FILE_PATH = "tmp/epraccur.csv"
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -54,7 +56,19 @@ def main(month: str, zip_file: str = None):
         raise e
 
     try:
-        write_output_file(data, gp_code_to_name)
+        download_epraccur_data()
+    except Exception as e:
+        logger.error(f"Error downloading EPRACCUR CSV: {e}")
+        raise e
+
+    try:
+        gp_code_to_location = process_epraccur_data(EPRACCUR_TMP_FILE_PATH)
+    except Exception as e:
+        logger.error(f"Error processing EPRACCUR data: {e}")
+        raise e
+
+    try:
+        write_output_file(data, gp_code_to_name, gp_code_to_location)
     except Exception as e:
         logger.error(f"Error writing output file: {e}")
         raise e
@@ -163,33 +177,86 @@ def process_gpad_files(input_file_paths: list[str]):
     return data, gp_code_to_name
 
 
-def write_output_file(data: dict, gp_code_to_name: dict):
+def download_epraccur_data():
+    response = requests.get(EPRACCUR_URL)
+    response.raise_for_status()
+
+    with open(EPRACCUR_TMP_FILE_PATH, "wb") as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+        f.write(response.content)
+
+    logger.info(f"Downloaded EPRACCUR data to {EPRACCUR_TMP_FILE_PATH}")
+
+
+def process_epraccur_data(input_file_path: str):
+    gp_code_to_location = {}
+
+    with open(input_file_path, "r") as file:
+        reader = csv.reader(file)
+        # The file doesn't have a header row, so we don't need to skip the first row
+        for row in reader:
+            role_ids = row[25].split("|")
+            if "RO76" not in role_ids:
+                continue
+
+            # Ignore practices with a close date
+            if row[11].strip() != "":
+                continue
+
+            gp_code_to_location[row[0]] = {
+                "postcode": row[9].strip(),
+            }
+
+    return gp_code_to_location
+
+
+def write_output_file(data: dict, gp_code_to_name: dict, gp_code_to_location: dict):
     """
     Write the output file
 
     Args:
         data: A dictionary of GP codes to their appointment systems and main system
         gp_code_to_name: A dictionary of GP codes to their names
+        gp_code_to_location: A dictionary of GP codes to their location data
     """
     with open(OUTPUT_FILE, "w") as file:
         writer = csv.writer(file)
-        writer.writerow(["GP_ODS_CODE", "GP_NAME", "GP_GPAD_SYSTEMS", "GP_SYSTEM"])
+        writer.writerow(
+            ["GP_ODS_CODE", "GP_NAME", "GP_POSTCODE", "GP_GPAD_SYSTEMS", "GP_SYSTEM"]
+        )
         for gp_code, (appointment_systems, main_system) in data.items():
+            try:
+                postcode = gp_code_to_location[gp_code]["postcode"]
+            except KeyError:
+                postcode = None
+                logger.warning(f"Postcode not found for GP code: {gp_code}")
+
             writer.writerow(
-                [gp_code, gp_code_to_name[gp_code], appointment_systems, main_system]
+                [
+                    gp_code,
+                    gp_code_to_name[gp_code],
+                    postcode,
+                    appointment_systems,
+                    main_system,
+                ]
             )
     logger.info(f"Written output file: {OUTPUT_FILE}")
 
 
 def remove_tmp_files(month: str):
     """
-    Remove the temporary files for a given month
+    Remove the temporary files for a given month for GPAD
+    and the EPRACCUR CSV file
     """
     zip_file_path = f"tmp/{month}.zip"
     Path(zip_file_path).unlink()
+
     unzip_dir = f"tmp/{month}"
     shutil.rmtree(unzip_dir)
-    logger.info(f"Removed temporary files for {month}")
+
+    Path(EPRACCUR_TMP_FILE_PATH).unlink()
+    logger.info(f"Removed temporary files for {month} for GPAD and EPRACCUR")
 
 
 if __name__ == "__main__":
