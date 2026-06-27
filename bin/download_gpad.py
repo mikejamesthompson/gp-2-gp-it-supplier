@@ -15,13 +15,13 @@ from bs4 import BeautifulSoup
 from dateutil.relativedelta import relativedelta
 import requests
 
-from helpers import (
+from gpad_helpers import (
     get_data_file_paths,
     get_main_system_from_value,
     get_month_and_year_from_iso_month,
 )
 
-BASE_URL = "https://digital.nhs.uk/data-and-information/publications/statistical/appointments-in-general-practice"
+BASE_GPAD_URL = "https://digital.nhs.uk/data-and-information/publications/statistical/appointments-in-general-practice"
 OUTPUT_FILE = "data/gp_suppliers.csv"
 
 logging.basicConfig(
@@ -48,7 +48,7 @@ def main(month: str, zip_file: str = None):
     logger.info(f"Found {len(input_file_paths)} data files")
 
     try:
-        data, gp_code_to_name = process_data_files(input_file_paths)
+        data, gp_code_to_name = process_gpad_files(input_file_paths)
     except Exception as e:
         logger.error(f"Error processing data file: {e}")
         raise e
@@ -74,7 +74,7 @@ def download_gpad_zip_file(iso_month: str, zip_file_path: str = None):
     from the NHS Digital website
     """
     month, year = get_month_and_year_from_iso_month(iso_month)
-    url = f"{BASE_URL}/{month}-{year}"
+    url = f"{BASE_GPAD_URL}/{month}-{year}"
 
     if zip_file_path is None:
         logger.info(f"Finding download link for {iso_month} from {url}")
@@ -82,7 +82,7 @@ def download_gpad_zip_file(iso_month: str, zip_file_path: str = None):
         response.raise_for_status()
 
         try:
-            download_link = get_download_link_from_response(response)
+            download_link = get_gpad_download_link_from_response(response)
         except Exception as e:
             raise Exception(f"Error getting download link: {e}")
     else:
@@ -103,7 +103,7 @@ def download_gpad_zip_file(iso_month: str, zip_file_path: str = None):
     logger.info(f"Downloaded zip file to tmp/{iso_month}.zip")
 
 
-def get_download_link_from_response(response: requests.Response):
+def get_gpad_download_link_from_response(response: requests.Response):
     soup = BeautifulSoup(response.content, "html.parser")
     downloads = soup.select("div.nhsd-m-download-card")
 
@@ -132,7 +132,7 @@ def unzip_gpad_zip_file(month: str):
     return unzip_dir
 
 
-def process_data_files(input_file_paths: list[str]):
+def process_gpad_files(input_file_paths: list[str]):
     data = {}
     gp_code_to_name = {}
 
