@@ -9,6 +9,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import time
 import zipfile
 
 from bs4 import BeautifulSoup
@@ -24,6 +25,8 @@ from gpad_helpers import (
 BASE_GPAD_URL = "https://digital.nhs.uk/data-and-information/publications/statistical/appointments-in-general-practice"
 EPRACCUR_URL = "https://www.odsdatasearchandexport.nhs.uk/api/getReport?report=epraccur"
 OUTPUT_FILE = "data/gp_suppliers.csv"
+
+LOCATION_FIELDS = ["postcode", "latitude", "longitude", "district", "county"]
 EPRACCUR_TMP_FILE_PATH = "tmp/epraccur.csv"
 
 logging.basicConfig(
@@ -50,7 +53,7 @@ def main(month: str, zip_file: str = None):
     logger.info(f"Found {len(input_file_paths)} data files")
 
     try:
-        data, gp_code_to_name = process_gpad_files(input_file_paths)
+        gpad_data, gp_code_to_name = process_gpad_files(input_file_paths)
     except Exception as e:
         logger.error(f"Error processing data file: {e}")
         raise e
@@ -62,13 +65,15 @@ def main(month: str, zip_file: str = None):
         raise e
 
     try:
-        gp_code_to_location = process_epraccur_data(EPRACCUR_TMP_FILE_PATH)
+        gp_code_to_location = process_epraccur_data(
+            EPRACCUR_TMP_FILE_PATH, list(gpad_data.keys())
+        )
     except Exception as e:
         logger.error(f"Error processing EPRACCUR data: {e}")
         raise e
 
     try:
-        write_output_file(data, gp_code_to_name, gp_code_to_location)
+        write_output_file(gpad_data, gp_code_to_name, gp_code_to_location)
     except Exception as e:
         logger.error(f"Error writing output file: {e}")
         raise e
@@ -189,26 +194,69 @@ def download_epraccur_data():
     logger.info(f"Downloaded EPRACCUR data to {EPRACCUR_TMP_FILE_PATH}")
 
 
-def process_epraccur_data(input_file_path: str):
+def process_epraccur_data(input_file_path: str, gp_codes: list[str]):
     gp_code_to_location = {}
 
     with open(input_file_path, "r") as file:
         reader = csv.reader(file)
         # The file doesn't have a header row, so we don't need to skip the first row
-        for row in reader:
-            role_ids = row[25].split("|")
-            if "RO76" not in role_ids:
+        for index, row in enumerate(reader):
+            time.sleep(0.1)
+
+            if index % 500 == 0:
+                logger.info(f"Processed {index} rows of EPRACCUR data")
+
+            if row[0] not in gp_codes:
                 continue
 
-            # Ignore practices with a close date
-            if row[11].strip() != "":
-                continue
+            postcode = row[9].strip()
+            geography_data = get_geography_data_for_postcode(postcode)
 
             gp_code_to_location[row[0]] = {
-                "postcode": row[9].strip(),
+                "postcode": postcode,
+                **geography_data,
             }
 
     return gp_code_to_location
+
+
+def get_geography_data_for_postcode(postcode: str):
+    """
+    Get the geography data for a given postcode
+    """
+    response = requests.get(f"https://api.postcodes.io/postcodes/{postcode}")
+
+    # The API returns a 404 if the postcode is not found,
+    # but a 404 can mean the postcode is terminated
+    # and the API may still return a lat, lng
+    if response.status_code not in [200, 404]:
+        response.raise_for_status()
+
+    data = response.json()
+
+    if "result" in data:
+        return {
+            "latitude": data["result"]["latitude"],
+            "longitude": data["result"]["longitude"],
+            "district": data["result"]["codes"]["admin_district"],
+            "county": data["result"]["codes"]["admin_county"],
+        }
+    elif "terminated" in data:
+        logger.warning(f"Postcode {postcode} has been terminated")
+        return {
+            "latitude": data["terminated"]["latitude"],
+            "longitude": data["terminated"]["longitude"],
+            "district": "",
+            "county": "",
+        }
+    else:
+        logger.warning(f"No geography data found for postcode: {postcode}")
+        return {
+            "latitude": "",
+            "longitude": "",
+            "district": "",
+            "county": "",
+        }
 
 
 def write_output_file(data: dict, gp_code_to_name: dict, gp_code_to_location: dict):
@@ -223,24 +271,34 @@ def write_output_file(data: dict, gp_code_to_name: dict, gp_code_to_location: di
     with open(OUTPUT_FILE, "w") as file:
         writer = csv.writer(file)
         writer.writerow(
-            ["GP_ODS_CODE", "GP_NAME", "GP_POSTCODE", "GP_GPAD_SYSTEMS", "GP_SYSTEM"]
+            [
+                "ODS_CODE",
+                "NAME",
+                "POSTCODE",
+                "POSTCODE_LATITUDE",
+                "POSTCODE_LONGITUDE",
+                "POSTCODE_DISTRICT",
+                "POSTCODE_COUNTY",
+                "GPAD_SYSTEMS",
+                "SYSTEM",
+            ]
         )
         for gp_code, (appointment_systems, main_system) in data.items():
-            try:
-                postcode = gp_code_to_location[gp_code]["postcode"]
-            except KeyError:
-                postcode = None
+            location = gp_code_to_location.get(gp_code)
+            if location is None:
                 logger.warning(f"Postcode not found for GP code: {gp_code}")
+                location = {}
 
             writer.writerow(
                 [
                     gp_code,
                     gp_code_to_name[gp_code],
-                    postcode,
+                    *(location.get(field) for field in LOCATION_FIELDS),
                     appointment_systems,
                     main_system,
                 ]
             )
+
     logger.info(f"Written output file: {OUTPUT_FILE}")
 
 
