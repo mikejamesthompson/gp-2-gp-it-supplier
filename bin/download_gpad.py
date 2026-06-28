@@ -9,20 +9,25 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import time
 import zipfile
 
 from bs4 import BeautifulSoup
 from dateutil.relativedelta import relativedelta
 import requests
 
-from helpers import (
+from gpad_helpers import (
     get_data_file_paths,
     get_main_system_from_value,
     get_month_and_year_from_iso_month,
 )
 
-BASE_URL = "https://digital.nhs.uk/data-and-information/publications/statistical/appointments-in-general-practice"
+BASE_GPAD_URL = "https://digital.nhs.uk/data-and-information/publications/statistical/appointments-in-general-practice"
+EPRACCUR_URL = "https://www.odsdatasearchandexport.nhs.uk/api/getReport?report=epraccur"
 OUTPUT_FILE = "data/gp_suppliers.csv"
+
+LOCATION_FIELDS = ["postcode", "latitude", "longitude", "district", "county"]
+EPRACCUR_TMP_FILE_PATH = "tmp/epraccur.csv"
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -48,13 +53,27 @@ def main(month: str, zip_file: str = None):
     logger.info(f"Found {len(input_file_paths)} data files")
 
     try:
-        data, gp_code_to_name = process_data_files(input_file_paths)
+        gpad_data, gp_code_to_name = process_gpad_files(input_file_paths)
     except Exception as e:
         logger.error(f"Error processing data file: {e}")
         raise e
 
     try:
-        write_output_file(data, gp_code_to_name)
+        download_epraccur_data()
+    except Exception as e:
+        logger.error(f"Error downloading EPRACCUR CSV: {e}")
+        raise e
+
+    try:
+        gp_code_to_location = process_epraccur_data(
+            EPRACCUR_TMP_FILE_PATH, list(gpad_data.keys())
+        )
+    except Exception as e:
+        logger.error(f"Error processing EPRACCUR data: {e}")
+        raise e
+
+    try:
+        write_output_file(gpad_data, gp_code_to_name, gp_code_to_location)
     except Exception as e:
         logger.error(f"Error writing output file: {e}")
         raise e
@@ -74,7 +93,7 @@ def download_gpad_zip_file(iso_month: str, zip_file_path: str = None):
     from the NHS Digital website
     """
     month, year = get_month_and_year_from_iso_month(iso_month)
-    url = f"{BASE_URL}/{month}-{year}"
+    url = f"{BASE_GPAD_URL}/{month}-{year}"
 
     if zip_file_path is None:
         logger.info(f"Finding download link for {iso_month} from {url}")
@@ -82,7 +101,7 @@ def download_gpad_zip_file(iso_month: str, zip_file_path: str = None):
         response.raise_for_status()
 
         try:
-            download_link = get_download_link_from_response(response)
+            download_link = get_gpad_download_link_from_response(response)
         except Exception as e:
             raise Exception(f"Error getting download link: {e}")
     else:
@@ -103,7 +122,7 @@ def download_gpad_zip_file(iso_month: str, zip_file_path: str = None):
     logger.info(f"Downloaded zip file to tmp/{iso_month}.zip")
 
 
-def get_download_link_from_response(response: requests.Response):
+def get_gpad_download_link_from_response(response: requests.Response):
     soup = BeautifulSoup(response.content, "html.parser")
     downloads = soup.select("div.nhsd-m-download-card")
 
@@ -132,7 +151,7 @@ def unzip_gpad_zip_file(month: str):
     return unzip_dir
 
 
-def process_data_files(input_file_paths: list[str]):
+def process_gpad_files(input_file_paths: list[str]):
     data = {}
     gp_code_to_name = {}
 
@@ -163,33 +182,139 @@ def process_data_files(input_file_paths: list[str]):
     return data, gp_code_to_name
 
 
-def write_output_file(data: dict, gp_code_to_name: dict):
+def download_epraccur_data():
+    response = requests.get(EPRACCUR_URL)
+    response.raise_for_status()
+
+    with open(EPRACCUR_TMP_FILE_PATH, "wb") as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+        f.write(response.content)
+
+    logger.info(f"Downloaded EPRACCUR data to {EPRACCUR_TMP_FILE_PATH}")
+
+
+def process_epraccur_data(input_file_path: str, gp_codes: list[str]):
+    gp_code_to_location = {}
+
+    with open(input_file_path, "r") as file:
+        reader = csv.reader(file)
+        # The file doesn't have a header row, so we don't need to skip the first row
+        for index, row in enumerate(reader):
+            time.sleep(0.1)
+
+            if index % 500 == 0:
+                logger.info(f"Processed {index} rows of EPRACCUR data")
+
+            if row[0] not in gp_codes:
+                continue
+
+            postcode = row[9].strip()
+            geography_data = get_geography_data_for_postcode(postcode)
+
+            gp_code_to_location[row[0]] = {
+                "postcode": postcode,
+                **geography_data,
+            }
+
+    return gp_code_to_location
+
+
+def get_geography_data_for_postcode(postcode: str):
+    """
+    Get the geography data for a given postcode
+    """
+    response = requests.get(f"https://api.postcodes.io/postcodes/{postcode}")
+
+    # The API returns a 404 if the postcode is not found,
+    # but a 404 can mean the postcode is terminated
+    # and the API may still return a lat, lng
+    if response.status_code not in [200, 404]:
+        response.raise_for_status()
+
+    data = response.json()
+
+    if "result" in data:
+        return {
+            "latitude": data["result"]["latitude"],
+            "longitude": data["result"]["longitude"],
+            "district": data["result"]["codes"]["admin_district"],
+            "county": data["result"]["codes"]["admin_county"],
+        }
+    elif "terminated" in data:
+        logger.warning(f"Postcode {postcode} has been terminated")
+        return {
+            "latitude": data["terminated"]["latitude"],
+            "longitude": data["terminated"]["longitude"],
+            "district": "",
+            "county": "",
+        }
+    else:
+        logger.warning(f"No geography data found for postcode: {postcode}")
+        return {
+            "latitude": "",
+            "longitude": "",
+            "district": "",
+            "county": "",
+        }
+
+
+def write_output_file(data: dict, gp_code_to_name: dict, gp_code_to_location: dict):
     """
     Write the output file
 
     Args:
         data: A dictionary of GP codes to their appointment systems and main system
         gp_code_to_name: A dictionary of GP codes to their names
+        gp_code_to_location: A dictionary of GP codes to their location data
     """
     with open(OUTPUT_FILE, "w") as file:
         writer = csv.writer(file)
-        writer.writerow(["GP_ODS_CODE", "GP_NAME", "GP_GPAD_SYSTEMS", "GP_SYSTEM"])
+        writer.writerow(
+            [
+                "ODS_CODE",
+                "NAME",
+                "POSTCODE",
+                "POSTCODE_LATITUDE",
+                "POSTCODE_LONGITUDE",
+                "POSTCODE_DISTRICT",
+                "POSTCODE_COUNTY",
+                "GPAD_SYSTEMS",
+                "SYSTEM",
+            ]
+        )
         for gp_code, (appointment_systems, main_system) in data.items():
+            location = gp_code_to_location.get(gp_code)
+            if location is None:
+                logger.warning(f"Postcode not found for GP code: {gp_code}")
+                location = {}
+
             writer.writerow(
-                [gp_code, gp_code_to_name[gp_code], appointment_systems, main_system]
+                [
+                    gp_code,
+                    gp_code_to_name[gp_code],
+                    *(location.get(field) for field in LOCATION_FIELDS),
+                    appointment_systems,
+                    main_system,
+                ]
             )
+
     logger.info(f"Written output file: {OUTPUT_FILE}")
 
 
 def remove_tmp_files(month: str):
     """
-    Remove the temporary files for a given month
+    Remove the temporary files for a given month for GPAD
+    and the EPRACCUR CSV file
     """
     zip_file_path = f"tmp/{month}.zip"
     Path(zip_file_path).unlink()
+
     unzip_dir = f"tmp/{month}"
     shutil.rmtree(unzip_dir)
-    logger.info(f"Removed temporary files for {month}")
+
+    Path(EPRACCUR_TMP_FILE_PATH).unlink()
+    logger.info(f"Removed temporary files for {month} for GPAD and EPRACCUR")
 
 
 if __name__ == "__main__":

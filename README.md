@@ -1,12 +1,16 @@
 # Data on GP practice GPIT system supplier from Appointments in General Practice data
 
-This repository contains data mapping GP practice ODS codes to their main GP IT system, updated monthly, based on the data published in the [Appointments in General Practice data by NHS Digital][nhsd_apts].
+This repository contains data mapping GP practice ODS codes to their main GP IT system, updated monthly, based on the data published in the [Appointments in General Practice data by NHS Digital][nhsd_apts]. The data is supplemented with GP postcodes from [NHS England][epraccur] and geography data from the [Postcodes.io API][postcodes_io].
 
 The data is available in the `data/gp_suppliers.csv` file.
 
 As the data is updated monthly, changes in system supplier can be seen in the diffs between versions.
 
 [nhsd_apts]: https://digital.nhs.uk/data-and-information/publications/statistical/appointments-in-general-practice
+
+[epraccur]: https://digital.nhs.uk/services/organisation-data-service/data-search-and-export/csv-downloads/gp-and-gp-practice-related-data
+
+[postcodes_io]: https://postcodes.io/
 
 ## Updating
 
